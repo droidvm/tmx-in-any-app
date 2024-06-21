@@ -1,0 +1,73 @@
+#!/data/data/com.zzvm/files/z/usr/bin/bash
+
+echo "传入参数: $@" >&2
+if [[ "$@" == *"--fsys-tarfile"* ]]; then
+
+	TMPTAR=${TMPDIR}/deb.tar
+	TMPDEB=${TMPDIR}/deb
+
+	echo "正在解压 deb 转 tar" >&2
+	echo "dpkg-deb.ori -v -D $@" >&2
+			dpkg-deb.ori -v -D $@  >${TMPTAR}
+			#  --nocheck
+
+	echo "正在释放 tar 包到文件系统指定目录" >&2
+	rm -rf   ${TMPDEB}
+	mkdir -p ${TMPDEB} 2>/dev/null
+	tar -xf  ${TMPTAR} -C ${TMPDEB} >&2
+
+	echo "正在改名 com.termux => com.zzvm" >&2
+	cd ${TMPDEB}/data/data/ && mv -f com.termux  com.zzvm
+	echo "?: $?" >&2
+
+	echo "正在移动目录" >&2
+	mkdir -p ${TMPDEB}/data/data/com.zzvm/files/z
+	mv    -f ${TMPDEB}/data/data/com.zzvm/files/usr  ${TMPDEB}/data/data/com.zzvm/files/z
+
+	. ${TERMUX_PREFIX}/../tools/zzswmgr/ezapp/tmx/tmx-patch >&2
+	echo "正在对软件包做 eflPatch (bionic libc 系列的软件)">&2
+	WBOXDIR=${TERMUX_PREFIX}
+	WBOX_RUN_PATH=${TERMUX_PREFIX}/usr/lib
+	WBOX_INTERPRT=
+	WBOX_FORCERPT=
+	# wboxPatchElfFiles ${TMPDEB}/data/data/com.zzvm/files/z/usr >&2
+	wboxPatchElfFiles ${TMPDEB}/data/data/com.zzvm/files/z/usr/bin     >&2
+	wboxPatchElfFiles ${TMPDEB}/data/data/com.zzvm/files/z/usr/lib     >&2
+	wboxPatchElfFiles ${TMPDEB}/data/data/com.zzvm/files/z/usr/var/lib/dpkg/info >&2
+	# wboxPatchElfFiles ${TMPDEB}/data/data/com.zzvm/files/z/usr/var/lib >&2
+	# echo "TERMUX_PREFIX: ${TERMUX_PREFIX}" >&2
+
+	echo "正在安装" >&2
+	cp -Rf    ${TMPDEB}/data/data/com.zzvm/files/z/.   ${TERMUX_PREFIX}/ >&2
+	# cp -Rfv ${TMPDEB}/data/data/com.zzvm/files/z/.   ${TERMUX_PREFIX}/ >&2
+	echo "?: $?" >&2
+
+	echo "准备返回tar空包，避免父进程出错" >&2
+	rm  -rf ${TMPTAR}
+	cd      ${TMPDEB} && rm -rf *
+	cd      ${TMPDEB} && tar -cf ${TMPTAR}  .
+	cat     ${TMPTAR}
+
+	# echo "重新打包 => ${TMPTAR}" >&2
+	# cd  ${TMPDEB} && tar -cvf ${TMPTAR}  . >&2
+	# echo "?: $?" >&2
+	# cat ${TMPTAR}
+
+	rescode=$?
+elif [[ "$@" == *"--control"* ]]; then
+	echo "dpkg-deb.ori -v -D $@" >&2
+			dpkg-deb.ori -v -D $@
+	rescode=$?
+	ls -al ${TERMUX_PREFIX}/usr/var/lib/dpkg/tmp.ci >&2
+	if [ $rescode -eq 0 ]; then
+		sed -i "s|data/data/com.termux/files|data/data/com.zzvm/files/z|g"	${TERMUX_PREFIX}/usr/var/lib/dpkg/tmp.ci/control
+		sed -i "s|data/data/com.termux/files|data/data/com.zzvm/files/z|g"	${TERMUX_PREFIX}/usr/var/lib/dpkg/tmp.ci/conffiles
+	fi
+else
+	echo "dpkg-deb.ori -v -D $@" >&2
+			dpkg-deb.ori -v -D $@
+	rescode=$?
+fi
+echo "rescode: $rescode">&2
+unset TAR_ZZ_ENV
+exit $rescode

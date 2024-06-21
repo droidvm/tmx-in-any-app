@@ -1,0 +1,161 @@
+#!/data/data/com.zzvm/files/z/usr/bin/bash
+
+
+# termux path to zzvm path, 处理结果保存在变量 ${ZPATH} 中
+function tpath2zpath() {
+	tmpstr=$1
+	unset ZPATH
+	if [[ "$tmpstr" == "" ]]; then
+		return
+	fi
+	if [[ "$tmpstr" != *"com.termux/files"* ]]; then
+		return
+	fi
+
+	dststr="/data/user/0/com.zzvm/files/z"
+
+	srcstr1="/data/data/com.termux/files"
+	srcstr2="/data/user/0/com.termux/files"
+	if [[ "$tmpstr" == *"${srcstr1}"* ]]; then
+		ZPATH=${tmpstr//${srcstr1}/\/data\/user\/0\/com.zzvm\/files\/z}
+	elif [[ "$tmpstr" == *"${srcstr2}"* ]]; then
+		ZPATH=${tmpstr//${srcstr2}/\/data\/user\/0\/com.zzvm\/files\/z}
+	fi
+}
+
+# 返回值保存在 ${INTERPRETER} 变量中
+function get_interpreter_from_str() {
+	unset INTERPRETER
+	if [[ "$fileinfo" == *", interpreter "* ]]; then
+		INTERPRETER=${fileinfo##*interpreter }
+		INTERPRETER=${INTERPRETER%%,*}
+	fi
+}
+
+# 返回值保存在 ${RPATH} 变量中
+function get_rpath_from_str() {
+	unset RPATH
+	if [[ "$elf_info" == *"Library rpath:"* ]]; then
+		RPATH=`echo "$elf_info"|grep "Library rpath:"`
+		RPATH=${RPATH##*"Library rpath: ["}
+		RPATH=${RPATH%%"]"*}
+	fi
+}
+
+# 返回值保存在 ${RUNPATH} 变量中
+function get_runpath_from_str() {
+	unset RUNPATH
+	if [[ "$elf_info" == *"Library runpath:"* ]]; then
+		RUNPATH=`echo "$elf_info"|grep "Library runpath:"`
+		RUNPATH=${RUNPATH##*"Library runpath: ["}
+		RUNPATH=${RUNPATH%%"]"*}
+	fi
+}
+
+
+ELFPATH_LOG_ENABLED=${ELFPATH_LOG_ENABLED=0}
+PATH_LOG_PATCH=/tmp/patch.log
+# 在这个函数里面处理
+function process_file() {
+	i=$1
+
+	# echo "${i}" >&2
+
+	fileinfo=`file $i 2>/dev/null`
+
+	if [[ "$fileinfo" != *": ELF "* ]]; then
+		# echo "跳过, 不是elf文件: $filename"
+		return
+	fi
+
+	if [[ "$fileinfo" == *"relocatable"* ]]; then
+		# echo "跳过, 不是动态库或可执行文件: $filename"
+		return
+	fi
+
+	if [[ "$fileinfo" == *"statically linked"* ]]; then
+		# echo "跳过, 不是动态库或可执行文件: $filename"
+		return
+	fi
+
+	elf_info=`readelf -d $i 2>/dev/null`
+
+	get_interpreter_from_str
+	get_rpath_from_str
+	get_runpath_from_str
+
+	tpath2zpath "$INTERPRETER"
+	newi=$ZPATH
+
+	tpath2zpath "$RPATH"
+	newr=$ZPATH
+
+	tpath2zpath "$RUNPATH"
+	newu=$ZPATH
+
+
+	FORCELOG=0
+	bdir=`dirname $i`
+	if   [[ "$bdir" == "$WBOXDIR/usr/glibc"* ]]; then
+		if   [[ "$bdir" == "$WBOXDIR/usr/glibc/bin"* ]]; then
+			if [ "$RPATH" == "" ] && [ "$RUNPATH" == "" ]; then
+				FORCELOG=1
+				newr=${APP_INTERNAL_DIR}/z/usr/glibc/lib:${APP_INTERNAL_DIR}/z/usr/glibc/lib/x86_64-linux-gnu/
+			fi
+		fi
+		# 	# newr="\$ORIGIN"
+	# elif [ "$bdir" == "$WBOXDIR/usr/"* ]; then
+	# 	newu=${APP_INTERNAL_DIR}/z/usr/lib
+	# 	# 	newu="\$ORIGIN"
+	fi
+
+
+	command=""
+	if [ "$newr" != "" ]; then
+		command+="--force-rpath --set-rpath ${newr} "
+ 	elif  [ "$newu" != "" ]; then
+		command+="              --set-rpath ${newu} "
+	fi
+
+	if [ "$newi" != "" ]; then
+		command+="--set-interpreter ${newi} "
+	fi
+
+	if [ $ELFPATH_LOG_ENABLED -ne 0 ] || [ $FORCELOG -eq 1 ]; then
+		itemlen=80
+		echo                                        "   当前文件: $i"
+		printf "%-${itemlen}s %-${itemlen}s""\n"	"interpreter: ${INTERPRETER=-}"	"=> ${newi=-}"	# >> ${PATH_LOG_PATCH}
+		printf "%-${itemlen}s %-${itemlen}s""\n"	"      rpath: ${RPATH=-}"		"=> ${newr=-}"	# >> ${PATH_LOG_PATCH}
+		printf "%-${itemlen}s %-${itemlen}s""\n"	"    runpath: ${RUNPATH=-}"		"=> ${newu=-}"	# >> ${PATH_LOG_PATCH}
+		echo										"   patchelf: $command"
+		echo ""
+	fi
+
+	if [ "$command" != "" ]; then
+		patchelf $command $i
+		if [ $? -ne 0 ]; then echo "处理失败 $i"; fi
+	fi
+}
+
+function wboxPatchElfFiles() {
+
+	dirtopatch=$1
+	if [ "$dirtopatch" == "" ]; then
+		return
+	fi
+
+	for i in ${dirtopatch}/*; do
+		if [ -d "$i" ]; then
+			wboxPatchElfFiles $i
+		elif [ -h "$i" ]; then
+			# 文件链接
+			:
+		else
+			sed -i "s|data/data/com.termux/files|data/data/com.zzvm/files/z|g"	`realpath $i`
+			sed -i "s|data/data/com.termux/cache|data/data/com.zzvm/files/z|g"	`realpath $i`
+			process_file $i
+		fi
+	done
+
+}
+
